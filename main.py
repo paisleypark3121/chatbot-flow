@@ -3,6 +3,14 @@ import json
 import re
 import string
 
+import io
+import fitz
+
+from langchain.vectorstores import Chroma
+from langchain.embeddings import OpenAIEmbeddings
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.schema.document import Document
+
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -78,6 +86,37 @@ functions=[
             },
             "required": ["server_ip_address","gateway_ip_address","numhosts"],
         },
+    },
+    {
+        "name": "fake_conf",
+        "description": "This function is used to configure a FAKE server; when the user asks for the FAKE server configuration, it gets the parameters provided by the user and fill them into the properties",
+        "definition": "FAKE",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "fake_ip_address": {
+                    "type": "string",
+                    "description": "The IP of the fake server, e.g. 192.168.1.1 /24",
+                },
+                "num_fakes": {
+                    "type": "integer",
+                    "description": "Number of fake clients that the FAKE server can handle, e.g. 100",
+                },
+                "fake_pool": {
+                    "type": "string",
+                    "description": "Name of the FAKE pool to be configured, e.g. MY_FAKE_POOL",
+                },
+                "fake_mirror": {
+                    "type": "string",
+                    "description": "The IP of the fake server mirror, e.g. 192.168.1.100 /24",
+                },
+                "fake_clients": {
+                    "type": "string",
+                    "description": "The IPs of the fake clients that can be connected to the FAKE server, e.g. from 192.168.1.100 /24 to 192.168.1.110 /24 or specific IP addresses",
+                },
+            },
+            "required": ["fake_pool","fake_ip_address","num_fakes"],
+        },
     }
 ]
 
@@ -139,6 +178,20 @@ def process_arguments(functions, arguments):
             print(f"Error in parsing json: {e}")
 
     return result
+
+def get_local_text(filename):
+    with open(filename, "r", encoding="utf-8") as local_file:
+        return local_file.read()
+    return None
+
+def get_local_pdf(filename):
+    pdf_text = ""
+    with fitz.open(filename) as pdf_document:
+        for page_num in range(pdf_document.page_count):
+            page = pdf_document.load_page(page_num)
+            pdf_text += page.get_text() + "\n"  # Aggiungi un ritorno a capo tra le pagine
+    return pdf_text
+    return None
 
 def main_loop():
 
@@ -263,7 +316,181 @@ def main_loop():
     except KeyboardInterrupt:
         print("BYE BYE!!!")
 
-main_loop()
+def main_loop_with_content():
+    print(TextColors.RESET)
+
+    client=OpenAI()
+    embedding=OpenAIEmbeddings()
+
+    location="./files/FAKE_Server_Network_Environment_Guide.txt"
+
+    if location.endswith(".txt"):
+        content=get_local_text(location)
+    elif location.endswith(".pdf"):
+        content=get_local_pdf(location)
+
+    if content is None:
+        return None
+
+    # if len(content) < 5000:
+    #     chunk_size = 500
+    #     chunk_overlap = 50
+    # else:
+    chunk_size = 800
+    chunk_overlap = 100
+
+    # print(chunk_size)
+    # print(chunk_overlap)
+
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap, 
+        length_function=len,
+    )
+    
+    texts = text_splitter.split_text(content)
+    splits = [Document(page_content=t) for t in texts]
+    
+    vectordb=Chroma.from_documents(
+        documents=splits, 
+        embedding=embedding, 
+        collection_metadata={"hnsw:space": "cosine"}
+    )
+    retriever=vectordb.as_retriever()
+
+    messages=[]
+    messages.append({"role":"system","content":system_message})
+
+    try:
+        print("\n***WELCOME***\n")
+        while True:
+            query = input("\nUser: ")
+            messages.append({"role":"user","content":query})
+
+            docs=retriever.get_relevant_documents(query)
+            #print(docs[0])
+            updated_system_message=system_message.replace("{context}", docs[0].page_content)
+            messages[0]["content"]=updated_system_message
+
+            response = client.chat.completions.create(
+                messages=messages,
+                model='gpt-3.5-turbo-0613',
+                temperature=0,
+                max_tokens=400,
+                top_p=1,
+                frequency_penalty=0,
+                presence_penalty=0,
+                functions=functions,
+                function_call="auto"
+            )
+
+            print(TextColors.RED)
+            print(response)
+            print(TextColors.RESET)
+
+            #check if the response contains content or not
+            if response.choices[0].message.content:
+                print("Assistant: "+response.choices[0].message.content)
+                messages.append({"role":"assistant","content":response.choices[0].message.content})
+            elif response.choices[0].message.function_call:
+                function_to_process = find_function_by_name(functions, response.choices[0].message.function_call.name)
+                
+                # print(TextColors.GREEN)
+                # print(function_to_process)
+                # print(TextColors.RESET)
+
+                if function_to_process:
+                    arguments = response.choices[0].message.function_call.arguments
+                    elements = process_arguments([function_to_process], arguments)
+
+                    # print(TextColors.GREEN)
+                    # print(arguments)
+                    # print(elements)
+                    # print(TextColors.RESET)
+
+                    message_generated = False
+
+                    for prop_name, prop_info in function_to_process['parameters']['properties'].items():
+                        prop_value = elements[prop_name]
+
+                        # print(TextColors.GREEN)
+                        # print(prop_value)
+                        # print(TextColors.RESET)
+                        
+                        if prop_value is None and prop_name in function_to_process['parameters']['required']:
+                            prop_description = prop_info.get('description', '')
+                            prop_description = prop_description[0].lower() + prop_description[1:]
+
+                            # Generate the message
+                            message = 'Please provide me with ' + prop_description
+                            print("Assistant: "+message)
+                            messages.append({"role":"assistant","content":message})
+
+                            message_generated=True
+
+                            break
+
+                    if not message_generated:
+                        # All required elements have been retrieved:
+                        message="Please generate the script"
+                        message=message +" for the final configuration of the "
+                        message=message + get_definition(functions=functions, name=response.choices[0].message.function_call.name)
+                        message=message+" based on the following parameters: "
+
+                        for prop_name, prop_info in function_to_process['parameters']['properties'].items():
+                            prop_value = elements[prop_name]
+    
+                            if prop_value is not None:
+                                prop_description = prop_info.get('description', '')
+                                prop_description = prop_description[0].lower() + prop_description[1:]
+                                message=message+"\n - "+process_prop_description(prop_description)+": "+str(prop_value)+"; "
+
+                        print(TextColors.BLUE)
+                        print(message)
+                        print(TextColors.RESET)
+
+                        messages_final=[]
+                        messages_final.append({"role":"system","content":system_message_final})
+                        messages_final.append({"role":"user","content":message})
+
+                        docs=retriever.get_relevant_documents(message)
+                        #print(docs[0])
+                        updated_system_message=system_message_final.replace("{context}", docs[0].page_content)
+                        messages_final[0]["content"]=updated_system_message
+
+                        print(TextColors.GREEN)
+                        print(messages_final)
+                        print(TextColors.RESET)
+
+                        response = client.chat.completions.create(
+                            messages=messages_final,
+                            model='gpt-3.5-turbo-0613',
+                            temperature=0,
+                            max_tokens=400,
+                            top_p=1,
+                            frequency_penalty=0,
+                            presence_penalty=0
+                        )
+
+                        print(TextColors.RED)
+                        print(response)
+                        print(TextColors.RESET)
+
+                        print("Assistant: "+response.choices[0].message.content)
+                        messages.append({"role":"user","content":message})
+                        messages.append({"role":"assistant","content":response.choices[0].message.content})
+                else:
+                    wrong="something wrong occurred..."
+                    print("Assistant: "+wrong)
+                    messages.append({"role":"assistant","content":wrong})
+
+            messages = set_messages(messages,rolling)
+            
+    except KeyboardInterrupt:
+        print("BYE BYE!!!")
+
+#main_loop()
+main_loop_with_content()
 
 
 

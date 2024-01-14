@@ -1,0 +1,44 @@
+FAKE Server Network Environment Configuration Guide
+
+Introduction to FAKE Server
+
+A FAKE server is a specialized configuration used in network environments for managing communication between a server and a group of clients. It is specifically designed to implement the
+FAKE protocol, facilitating interactions between the server and connected clients.
+
+Configuring Network Settings
+For setting up network parameters like IP addresses, subnet masks, and default gateways, standard CISCO commands are utilized.
+
+Key Component: FAKE Server Pool
+The essential element of a FAKE server is its FAKE Server Pool, which acts as a central hub containing the server, its properties, and the managed clients.
+
+Managing the FAKE Server Pool
+Creation: To create a new FAKE server pool, use the command: create fake_server_pool <FAKE_SERVER_POOL_NAME>
+Deletion: To delete an existing FAKE server pool, use: delete fake_server_pool <FAKE_SERVER_POOL_NAME>
+Access: To access a specific FAKE server pool, use: access fake_server_pool <FAKE_SERVER_POOL_NAME>
+
+Note: Attempting to access a non-existent pool will result in an exception. The 'create' command also grants access if the pool already exists.
+
+Adding the FAKE Server to the Pool
+After defining or accessing the FAKE server pool, add the server's IP address using: add fake_server <SERVER_IP_ADDRESS>
+This command initiates a network search (FK_SEND) for the server; if found, an acknowledgement (FK_ACK) is received, allowing further configuration.
+
+Configuring FAKE Server Pool Settings
+Number of FAKE Clients: Set the maximum number of connectable FAKE clients using: num_fakes <DEFINE_NUM_OF_FAKES>
+Mirror Configuration: Include a FAKE mirror in the server for replicating behavior, configurable with: mirror <IP_ADDRESS_MIRROR>
+Adding FAKE Clients: Introduce FAKE clients to the server's pool with: add fake_client <CLIENT_IP_ADDRESS>
+Similar to the server, a network search (FKCL_SEND) locates the client; a successful find results in
+an acknowledgement (FKCL_ACK) for continued configuration.
+
+Example Configuration
+For a FAKE server pool named MY_POOL with a maximum of 10 clients, the FAKE server IP address 192.168.1.1 /24, the mirror IP address 192.168.1.2 /24, and clients from 192.168.1.10 /24 to 192.168.1.15 /24, the configuration commands would be:
+
+create fake_server_pool MY_POOL
+add fake_server 192.168.1.1 /24
+mirror 192.168.1.2 /24
+num_fakes 10
+add fake_client 192.168.1.110 /24
+add fake_client 192.168.1.111 /24
+add fake_client 192.168.1.112 /24
+add fake_client 192.168.1.113 /24
+add fake_client 192.168.1.114 /24
+add fake_client 192.168.1.115 /24
